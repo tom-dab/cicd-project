@@ -1,0 +1,142 @@
+pipeline {
+    agent {
+        docker {
+            image 'python:3.11-slim'
+            args '-u root'
+        }
+    }
+    
+    environment {
+        PYTHONPATH = "${WORKSPACE}/backend"
+        PROJECT_NAME = 'CICD-Project-Antoine'
+    }
+    
+    stages {
+        stage('🔍 Checkout & Info') {
+            steps {
+                echo "🚀 Démarrage de la pipeline pour ${env.PROJECT_NAME}"
+                echo "📂 Workspace: ${env.WORKSPACE}"
+                echo "🌿 Branche: ${env.GIT_BRANCH}"
+                echo "📝 Commit: ${env.GIT_COMMIT}"
+                
+                sh '''
+                    echo "✅ Code source récupéré depuis Git"
+                    echo "📁 Structure du projet:"
+                    ls -la
+                    
+                    echo ""
+                    echo "🐍 Fichiers Python trouvés:"
+                    find . -name "*.py" -type f
+                    
+                    echo ""
+                    echo "🧪 Fichiers de test trouvés:"
+                    find . -name "*test*.py" -type f
+                '''
+            }
+        }
+        
+        stage('🔧 Setup Environment') {
+            steps {
+                echo '🔧 Configuration de l\'environnement Python'
+                sh '''
+                    echo "📦 Mise à jour de pip"
+                    python -m pip install --upgrade pip
+                    
+                    echo "🔍 Analyse des dépendances requises"
+                    if [ -f "requirements.txt" ]; then
+                        echo "📋 Installation via requirements.txt:"
+                        cat requirements.txt
+                        pip install -r requirements.txt
+                    else
+                        echo "📦 Installation des dépendances détectées pour Flask"
+                        pip install flask flask-cors requests
+                    fi
+                    
+                    echo "🧪 Installation des outils de test"
+                    pip install pytest pytest-html pytest-cov pytest-xdist
+                    
+                    echo "✅ Environnement configuré"
+                    echo "🐍 Version Python: $(python --version)"
+                    echo "📦 Packages installés:"
+                    pip list | grep -E "(flask|pytest|requests)" || pip list | head -10
+                '''
+            }
+        }
+        
+        stage('🧪 Run Tests') {
+            steps {
+                echo '🧪 Exécution des tests unitaires'
+                sh '''
+                    echo "🔬 Démarrage des tests avec pytest"
+                    
+                    export PYTHONPATH="${WORKSPACE}/backend:${PYTHONPATH}"
+                    
+                    pytest -v \
+                        --junitxml=test-results.xml \
+                        --html=test-report.html \
+                        --self-contained-html \
+                        --cov=backend \
+                        --cov-report=html:htmlcov \
+                        --cov-report=term-missing \
+                        --cov-report=xml:coverage.xml \
+                        backend/ || TEST_EXIT_CODE=$?
+                    
+                    echo ""
+                    echo "📊 Résultats des tests générés:"
+                    ls -la test-results.xml test-report.html coverage.xml 2>/dev/null || echo "Certains rapports manquants"
+                    
+                    exit ${TEST_EXIT_CODE:-0}
+                '''
+            }
+            
+            post {
+                always {
+                    script {
+                        try {
+                            if (fileExists('test-results.xml')) {
+                                junit testResultsPattern: 'test-results.xml',
+                                      allowEmptyResults: false,
+                                      skipPublishingChecks: true
+                                echo "✅ Rapports de tests publiés dans Jenkins"
+                            }
+                        } catch (Exception e) {
+                            echo "⚠️ Impossible de publier les résultats JUnit: ${e.getMessage()}"
+                        }
+                        
+                        try {
+                            if (fileExists('test-report.html')) {
+                                archiveArtifacts artifacts: 'test-report.html',
+                                               fingerprint: true,
+                                               allowEmptyArchive: true
+                            }
+                            if (fileExists('htmlcov/index.html')) {
+                                archiveArtifacts artifacts: 'htmlcov/**/*',
+                                               fingerprint: true,
+                                               allowEmptyArchive: true
+                            }
+                        } catch (Exception e) {
+                            echo "⚠️ Archivage partiel: ${e.getMessage()}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '🎉 BUILD RÉUSSI!'
+            echo '✅ Tous les tests sont passés avec succès'
+        }
+        
+        failure {
+            echo '❌ BUILD ÉCHOUÉ!'
+            echo '🔍 Vérifiez les logs ci-dessus pour identifier le problème'
+        }
+        
+        unstable {
+            echo '⚠️ BUILD INSTABLE!'
+            echo '🧪 Des tests ont échoué mais le build continue'
+        }
+    }
+}
