@@ -38,11 +38,79 @@ pipeline {
                 '''
             }
         }
+
+        stage('Build Artifacts') {
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+            }
+            steps {
+                sh '''
+                    echo "📦 Création de l'archive du front"
+                    cd frontend
+                    zip -r ../front.zip .
+                    cd ..
+                    echo "📦 Création de l'archive du back"
+                    zip -r back.zip backend
+                '''
+                archiveArtifacts artifacts: 'front.zip', fingerprint: true
+                archiveArtifacts artifacts: 'back.zip', fingerprint: true
+            }
+        }
+
+        stage('Deploy to Server') {
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+            }
+            steps {
+                echo '🚀 Déploiement sur le serveur Linux'
+                sshagent(['ssh-credential-id']) {
+                    sh '''
+                        # ⚠️ À ADAPTER PAR CHAQUE CAMARADE :
+                        # Remplacer ces valeurs par celles de votre VM
+                        export SERVER_IP="<VOTRE_IP_OU_HOSTNAME>"
+                        export SSH_USER="<VOTRE_UTILISATEUR_SSH>"
+                        
+                        echo "📤 Transfert des archives vers le serveur"
+                        scp front.zip ${SSH_USER}@${SERVER_IP}:/tmp/
+                        scp back.zip ${SSH_USER}@${SERVER_IP}:/tmp/
+                        
+                        echo "🌐 Déploiement du front"
+                        ssh ${SSH_USER}@${SERVER_IP} << 'EOF'
+sudo -n bash -c '
+    cd /var/www/html
+    rm -rf *
+    unzip -q /tmp/front.zip
+    echo "✅ Front déployé"
+'
+EOF
+                        
+                        echo "🐍 Déploiement du back"
+                        ssh ${SSH_USER}@${SERVER_IP} << 'EOF'
+sudo -n bash -c '
+    mkdir -p /opt/app
+    cd /opt/app
+    unzip -qo /tmp/back.zip
+    
+    python3 -m venv venv
+    . venv/bin/activate
+    pip install -r backend/requirements.txt
+    
+    echo "✅ Back déployé"
+    
+    # À adapter : relancer le service selon votre config
+    # systemctl restart app-backend (si service systemd)
+    # ou lancer directement : nohup python backend/app.py &
+'
+EOF
+                    '''
+                }
+            }
+        }
     }
 
     post {
         always { echo '🧹 Nettoyage terminé' }
-        success { echo '🎉 Pipeline Python réussie!' }
+        success { echo '🎉 Pipeline Python réussie et déployée!' }
         failure { echo '❌ Échec de la pipeline Python' }
         unstable { echo '⚠️ Pipeline instable' }
     }
