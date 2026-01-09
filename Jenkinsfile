@@ -16,6 +16,7 @@ pipeline {
         FRONTEND_USER   = "user"
         BACKEND_DIR     = "/opt/backend"
         CONFIG_FILE     = "backend/config.env"
+	APP_PORT 	= "${params.APP_PORT}
     }
 
     stages {
