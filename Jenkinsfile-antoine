@@ -9,20 +9,30 @@ pipeline {
     environment {
         PYTHONPATH = "${WORKSPACE}/backend"
         PROJECT_NAME = 'CICD-Project-Antoine'
+        BUILD_VERSION = "1.0.${env.BUILD_NUMBER}"
+        ARTIFACT_PREFIX = "cicd-project-${env.BUILD_VERSION}"
     }
     
     stages {
         stage('🔍 Checkout & Info') {
             steps {
                 echo "🚀 Démarrage de la pipeline pour ${env.PROJECT_NAME}"
+                echo "📦 Version de build: ${env.BUILD_VERSION}"
                 echo "📂 Workspace: ${env.WORKSPACE}"
                 echo "🌿 Branche: ${env.GIT_BRANCH}"
-                echo "📝 Commit: ${env.GIT_COMMIT}"
                 
                 sh '''
                     echo "✅ Code source récupéré depuis Git"
                     echo "📁 Structure du projet:"
                     ls -la
+                    
+                    echo ""
+                    echo "🎨 Contenu frontend:"
+                    ls -la frontend/ 2>/dev/null || echo "Pas de dossier frontend"
+                    
+                    echo ""
+                    echo "⚙️ Contenu backend:"
+                    ls -la backend/ 2>/dev/null || echo "Pas de dossier backend"
                     
                     echo ""
                     echo "🐍 Fichiers Python trouvés:"
@@ -42,7 +52,10 @@ pipeline {
                     echo "📦 Mise à jour de pip"
                     python -m pip install --upgrade pip
                     
-                    echo "🔍 Analyse des dépendances requises"
+                    # Installation des outils système
+                    apt-get update && apt-get install -y zip unzip curl
+                    
+                    echo "🔍 Installation des dépendances Python"
                     if [ -f "requirements.txt" ]; then
                         echo "📋 Installation via requirements.txt:"
                         cat requirements.txt
@@ -52,13 +65,14 @@ pipeline {
                         pip install flask flask-cors requests
                     fi
                     
-                    echo "🧪 Installation des outils de test"
-                    pip install pytest pytest-html pytest-cov pytest-xdist
+                    echo "🧪 Installation des outils de test et build"
+                    pip install pytest pytest-html pytest-cov pytest-xdist setuptools wheel
                     
                     echo "✅ Environnement configuré"
                     echo "🐍 Version Python: $(python --version)"
-                    echo "📦 Packages installés:"
-                    pip list | grep -E "(flask|pytest|requests)" || pip list | head -10
+                    echo "📦 Outils disponibles:"
+                    which zip && echo "✅ zip disponible"
+                    which python && echo "✅ python disponible"
                 '''
             }
         }
@@ -85,7 +99,13 @@ pipeline {
                     echo "📊 Résultats des tests générés:"
                     ls -la test-results.xml test-report.html coverage.xml 2>/dev/null || echo "Certains rapports manquants"
                     
-                    exit ${TEST_EXIT_CODE:-0}
+                    # Vérification que les tests ont réussi
+                    if [ "${TEST_EXIT_CODE:-0}" -ne 0 ]; then
+                        echo "❌ Les tests ont échoué - le build sera arrêté"
+                        exit ${TEST_EXIT_CODE}
+                    else
+                        echo "✅ Tous les tests sont passés - le build peut continuer"
+                    fi
                 '''
             }
             
@@ -115,28 +135,168 @@ pipeline {
                                                allowEmptyArchive: true
                             }
                         } catch (Exception e) {
-                            echo "⚠️ Archivage partiel: ${e.getMessage()}"
+                            echo "⚠️ Archivage partiel des rapports: ${e.getMessage()}"
                         }
                     }
                 }
             }
         }
+        
+        stage('📦 Build Frontend') {
+            when {
+                expression {
+                    return currentBuild.result != 'FAILURE'
+                }
+            }
+            steps {
+                echo '🎨 Construction du package frontend'
+                sh '''
+                    echo "📁 Préparation du répertoire de build frontend"
+                    mkdir -p dist/frontend
+                    
+                    if [ -d "frontend" ]; then
+                        echo "✅ Dossier frontend trouvé"
+                        
+                        # Copie des fichiers frontend
+                        cp -r frontend/* dist/frontend/ 2>/dev/null || echo "⚠️ Aucun fichier à copier"
+                        
+                        # Ajout d'informations de version
+                        cat > dist/frontend/version.txt << EOF
+Build Version: ${BUILD_VERSION}
+Build Date: $(date)
+Build Number: ${BUILD_NUMBER}
+Git Branch: ${GIT_BRANCH:-exercice4-antoine}
+Git Commit: ${GIT_COMMIT:-N/A}
+EOF
+                        
+                        # Création du README de déploiement
+                        cat > dist/frontend/DEPLOY.md << 'EOF'
+# Frontend Deployment
+
+## Déploiement
+1. Extraire l'archive dans le répertoire web
+2. Configurer le serveur web (Apache/Nginx)
+3. Vérifier que l'API backend est accessible
+
+## Configuration
+- Modifiez les URLs d'API si nécessaire
+- Vérifiez les permissions des fichiers
+
+## Structure
+- index.html : Page principale
+- *.js : Scripts JavaScript
+- *.css : Feuilles de style
+EOF
+                        
+                        echo "📦 Création de l'archive frontend"
+                        cd dist
+                        zip -r "${ARTIFACT_PREFIX}-frontend.zip" frontend/
+                        cd ..
+                        
+                        echo "✅ Archive frontend créée: ${ARTIFACT_PREFIX}-frontend.zip"
+                        ls -la dist/*.zip
+                        
+                    else
+                        echo "⚠️ Pas de dossier frontend trouvé"
+                        # Création d'un frontend minimal pour la démo
+                        mkdir -p dist/frontend
+                        cat > dist/frontend/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head><title>CICD Project Frontend</title></head>
+<body>
+    <h1>Frontend - Version de démonstration</h1>
+    <p>Cette version a été générée automatiquement par Jenkins</p>
+    <p>Build: ${BUILD_VERSION}</p>
+</body>
+</html>
+EOF
+                        
+                        cd dist
+                        zip -r "${ARTIFACT_PREFIX}-frontend.zip" frontend/
+                        cd ..
+                        echo "✅ Frontend de démonstration créé"
+                    fi
+                '''
+            }
+        }
+        
+        stage('🐍 Build Backend') {
+            when {
+                expression {
+                    return currentBuild.result != 'FAILURE'
+                }
+            }
+            steps {
+                echo '⚙️ Construction du package backend Python'
+                sh '''
+                    echo "📁 Préparation du répertoire de build backend"
+                    mkdir -p dist/backend
+                    
+                    if [ -d "backend" ]; then
+                        echo "✅ Dossier backend trouvé"
+                        
+                        # Copie des fichiers backend (sans les tests)
+                        find backend -name "*.py" ! -name "*test*" -exec cp {} dist/backend/ \;
+                        
+                        # Copie des autres fichiers nécessaires
+                        [ -f "requirements.txt" ] && cp requirements.txt dist/backend/
+                        
+                        # Création du fichier de version
+                        cat > dist/backend/version.py << EOF
+# Version information generated by Jenkins
+BUILD_VERSION = "${BUILD_VERSION}"
+BUILD_DATE = "$(date)"
+BUILD_NUMBER = "${BUILD_NUMBER}"
+GIT_BRANCH = "${GIT_BRANCH:-exercice4-antoine}"
+GIT_COMMIT = "${GIT_COMMIT:-N/A}"
+
+def get_version_info():
+    return {
+        "version": BUILD_VERSION,
+        "build_date": BUILD_DATE,
+        "build_number": BUILD_NUMBER,
+        "git_branch": GIT_BRANCH,
+        "git_commit": GIT_COMMIT
     }
+EOF
+                        
+                        # Création du script de démarrage
+                        cat > dist/backend/start.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Script de démarrage pour l'application backend
+Généré automatiquement par Jenkins
+"""
+import os
+import sys
+
+# Ajout du répertoire courant au PYTHONPATH
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from app import app
+    from version import get_version_info
     
-    post {
-        success {
-            echo '🎉 BUILD RÉUSSI!'
-            echo '✅ Tous les tests sont passés avec succès'
-        }
-        
-        failure {
-            echo '❌ BUILD ÉCHOUÉ!'
-            echo '🔍 Vérifiez les logs ci-dessus pour identifier le problème'
-        }
-        
-        unstable {
-            echo '⚠️ BUILD INSTABLE!'
-            echo '🧪 Des tests ont échoué mais le build continue'
-        }
-    }
-}
+    print("🚀 Démarrage de l'application backend")
+    print(f"📦 Version: {get_version_info()}")
+    print("🌐 Application disponible sur http://localhost:5000")
+    
+    app.run(host='0.0.0.0', port=5000, debug=False)
+    
+except ImportError as e:
+    print(f"❌ Erreur d'import: {e}")
+    print("📋 Vérifiez que toutes les dépendances sont installées")
+    sys.exit(1)
+except Exception as e:
+    print(f"❌ Erreur de démarrage: {e}")
+    sys.exit(1)
+EOF
+                        
+                        # Création du README de déploiement
+                        cat > dist/backend/README.md << 'EOF'
+# Backend Deployment
+
+## Installation
+```bash
+pip install -r requirements.txt
