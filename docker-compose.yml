@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  frontend:
+    image: projet-front:latest
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - cicd-network
+      
+  backend:
+    image: projet-back:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - cicd-network
+
+networks:
+  cicd-network:
+    driver: bridge
