@@ -1,22 +1,11 @@
 pipeline {
     agent any
 
-    /* ===== PARAMÈTRES JENKINS EXO6 ===== */
-    parameters {
-        string(
-            name: 'APP_PORT',
-            defaultValue: '5000', // Elle va modifié le confichier de config plus bas
-            description: 'Port sur lequel le backend doit écouter'
-        )
-    }
-
-    /* ===== VARIABLES D’ENVIRONNEMENT ===== */
     environment {
-        FRONTEND_SERVER = "172.16.0.156"
-        FRONTEND_USER   = "user"
-        BACKEND_DIR     = "/opt/backend"
-        CONFIG_FILE     = "backend/config.env"
-	APP_PORT 	= "${params.APP_PORT}
+        APP_PORT = "5001"
+        FRONT_HOST = "172.16.0.156"
+        FRONT_USER = "user"
+        FRONT_PATH = "/var/www/html"
     }
 
     stages {
@@ -32,21 +21,21 @@ pipeline {
         stage('Setup Python') {
             steps {
                 sh '''
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    pip install --upgrade pip
-                    pip install -r backend/requirements.txt
-                    pip install pytest pytest-html pytest-cov flask-cors
+                python3 -m venv venv
+                . venv/bin/activate
+                pip install --upgrade pip
+                pip install -r backend/requirements.txt
+                pip install pytest pytest-html pytest-cov flask-cors
                 '''
             }
         }
 
         stage('Configurer le port (Exercice 6)') {
             steps {
-                echo "⚙️ Configuration du port backend : ${APP_PORT}"
+                echo "⚙️ Configuration du port backend"
                 sh '''
-                    echo "APP_PORT=${APP_PORT}" > backend/config.env
-                    cat backend/config.env
+                echo "PORT=${APP_PORT}" > backend/config.env
+                cat backend/config.env
                 '''
             }
         }
@@ -54,8 +43,8 @@ pipeline {
         stage('Tests') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    pytest backend/ --junitxml=results.xml
+                . venv/bin/activate
+                pytest backend/ --junitxml=results.xml
                 '''
             }
             post {
@@ -68,9 +57,9 @@ pipeline {
         stage('Build Backend') {
             steps {
                 sh '''
-                    echo "📦 Packaging backend"
-                    mkdir -p build
-                    zip -r build/backend.zip backend
+                echo "📦 Packaging backend"
+                mkdir -p build
+                zip -r build/backend.zip backend
                 '''
                 archiveArtifacts artifacts: 'build/backend.zip'
             }
@@ -79,9 +68,9 @@ pipeline {
         stage('Build Frontend') {
             steps {
                 sh '''
-                    echo "📦 Packaging frontend"
-                    mkdir -p build
-                    zip -r build/frontend.zip frontend
+                echo "📦 Packaging frontend"
+                mkdir -p build
+                zip -r build/frontend.zip frontend
                 '''
                 archiveArtifacts artifacts: 'build/frontend.zip'
             }
@@ -91,12 +80,9 @@ pipeline {
             steps {
                 sshagent(credentials: ['ssh-frontend']) {
                     sh '''
-                        echo "🚀 Déploiement frontend"
-                        scp build/frontend.zip ${FRONTEND_USER}@${FRONTEND_SERVER}:/tmp/
-                        ssh ${FRONTEND_USER}@${FRONTEND_SERVER} "
-                            unzip -o /tmp/frontend.zip -d /var/www/html &&
-                            rm /tmp/frontend.zip
-                        "
+                    echo "🚀 Déploiement frontend"
+                    scp build/frontend.zip ${FRONT_USER}@${FRONT_HOST}:/tmp/
+                    ssh ${FRONT_USER}@${FRONT_HOST} "sudo unzip -o /tmp/frontend.zip -d ${FRONT_PATH} && sudo rm /tmp/frontend.zip"
                     '''
                 }
             }
@@ -105,9 +91,9 @@ pipeline {
         stage('Deploy Backend') {
             steps {
                 sh '''
-                    echo "🚀 Déploiement backend"
-                    mkdir -p ${BACKEND_DIR}
-                    unzip -o build/backend.zip -d ${BACKEND_DIR}
+                echo "🚀 Déploiement backend"
+                sudo mkdir -p /opt/backend
+                sudo unzip -o build/backend.zip -d /opt/backend/
                 '''
             }
         }
@@ -115,7 +101,7 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Pipeline réussie – application déployée sur le port ${APP_PORT}"
+            echo "🎉 Pipeline réussie"
         }
         failure {
             echo "❌ Échec de la pipeline"
