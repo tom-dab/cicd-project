@@ -2,67 +2,69 @@ pipeline {
     agent any
 
     stages {
+
         stage('Checkout') {
             steps {
-                echo '📥 Clonage du projet Python'
-                git branch: 'exercice3', url: 'https://github.com/tom-dab/cicd-project.git'
+                git branch: 'exercice4-coralie',
+                    url: 'https://github.com/tom-dab/cicd-project.git'
             }
         }
 
-        stage('Setup Virtualenv & Dependencies') {
+        stage('Setup Python') {
             steps {
                 sh '''
-                    echo "🔧 Création d'un environnement virtuel"
                     python3 -m venv venv
                     . venv/bin/activate
-
-                    echo "📦 Mise à jour de pip"
                     pip install --upgrade pip
-
-                    echo "📦 Installation des dépendances du projet"
-                    if [ -f "backend/requirements.txt" ]; then
-                        pip install -r backend/requirements.txt
-                    fi
-
-                    # Installation des plugins pytest
+                    pip install -r backend/requirements.txt
                     pip install pytest pytest-html pytest-cov flask-cors
-
-                    echo "✅ Dépendances installées"
-                    pip list
                 '''
             }
         }
 
-        stage('Run Tests') {
+        stage('Tests') {
             steps {
                 sh '''
-                    echo "🧪 Exécution des tests Python"
                     . venv/bin/activate
-                    export PYTHONPATH="${PYTHONPATH}:${PWD}/backend"
-
-                    pytest -v \
-                        --junitxml=results.xml \
-                        --html=report.html \
-                        --self-contained-html \
-                        --cov=backend \
-                        backend/ || echo "Tests terminés avec erreurs"
+                    export PYTHONPATH=$PWD/backend
+                    pytest backend/ --junitxml=results.xml
                 '''
             }
             post {
                 always {
-                    script {
-                        if (fileExists('results.xml')) { junit 'results.xml' }
-                        if (fileExists('report.html')) { archiveArtifacts artifacts: 'report.html' }
-                    }
+                    junit 'results.xml'
                 }
+            }
+        }
+
+        stage('Build Backend') {
+            steps {
+                sh '''
+                    echo "📦 Packaging backend"
+                    mkdir -p build
+                    zip -r build/backend.zip backend
+                '''
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                sh '''
+                    echo "📦 Packaging frontend"
+                    mkdir -p build
+                    zip -r build/frontend.zip frontend
+                '''
             }
         }
     }
 
     post {
-        always { echo '🧹 Nettoyage terminé' }
-        success { echo '🎉 Pipeline Python réussie!' }
-        failure { echo '❌ Échec de la pipeline Python' }
-        unstable { echo '⚠️ Pipeline instable' }
+        success {
+            archiveArtifacts artifacts: 'build/*.zip'
+            echo '✅ Build et archivage réussis'
+        }
+        failure {
+            echo '❌ Pipeline échouée'
+        }
     }
 }
