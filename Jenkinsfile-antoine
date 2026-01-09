@@ -8,7 +8,6 @@ pipeline {
     
     environment {
         PYTHONPATH = "${WORKSPACE}/backend"
-        PROJECT_NAME = 'CICD-Project-Antoine'
         BUILD_VERSION = "1.0.${env.BUILD_NUMBER}"
         ARTIFACT_PREFIX = "cicd-project-${env.BUILD_VERSION}"
     }
@@ -16,287 +15,229 @@ pipeline {
     stages {
         stage('🔍 Checkout & Info') {
             steps {
-                echo "🚀 Démarrage de la pipeline pour ${env.PROJECT_NAME}"
-                echo "📦 Version de build: ${env.BUILD_VERSION}"
-                echo "📂 Workspace: ${env.WORKSPACE}"
-                echo "🌿 Branche: ${env.GIT_BRANCH}"
-                
+                echo "🚀 Démarrage pipeline ${env.BUILD_VERSION}"
                 sh '''
-                    echo "✅ Code source récupéré depuis Git"
-                    echo "📁 Structure du projet:"
+                    echo "✅ Code source récupéré"
                     ls -la
-                    
-                    echo ""
-                    echo "🎨 Contenu frontend:"
-                    ls -la frontend/ 2>/dev/null || echo "Pas de dossier frontend"
-                    
-                    echo ""
-                    echo "⚙️ Contenu backend:"
-                    ls -la backend/ 2>/dev/null || echo "Pas de dossier backend"
-                    
-                    echo ""
-                    echo "🐍 Fichiers Python trouvés:"
+                    echo "🐍 Fichiers Python:"
                     find . -name "*.py" -type f
-                    
-                    echo ""
-                    echo "🧪 Fichiers de test trouvés:"
-                    find . -name "*test*.py" -type f
                 '''
             }
         }
         
         stage('🔧 Setup Environment') {
             steps {
-                echo '🔧 Configuration de l\'environnement Python'
+                echo '🔧 Configuration environnement'
                 sh '''
-                    echo "📦 Mise à jour de pip"
-                    python -m pip install --upgrade pip
+                    pip install --upgrade pip
+                    apt-get update && apt-get install -y zip unzip
                     
-                    # Installation des outils système
-                    apt-get update && apt-get install -y zip unzip curl
-                    
-                    echo "🔍 Installation des dépendances Python"
                     if [ -f "requirements.txt" ]; then
-                        echo "📋 Installation via requirements.txt:"
-                        cat requirements.txt
                         pip install -r requirements.txt
                     else
-                        echo "📦 Installation des dépendances détectées pour Flask"
                         pip install flask flask-cors requests
                     fi
                     
-                    echo "🧪 Installation des outils de test et build"
-                    pip install pytest pytest-html pytest-cov pytest-xdist setuptools wheel
-                    
-                    echo "✅ Environnement configuré"
-                    echo "🐍 Version Python: $(python --version)"
-                    echo "📦 Outils disponibles:"
-                    which zip && echo "✅ zip disponible"
-                    which python && echo "✅ python disponible"
+                    pip install pytest pytest-html pytest-cov
+                    echo "✅ Environnement prêt"
                 '''
             }
         }
         
         stage('🧪 Run Tests') {
             steps {
-                echo '🧪 Exécution des tests unitaires'
+                echo '🧪 Exécution des tests'
                 sh '''
-                    echo "🔬 Démarrage des tests avec pytest"
+                    export PYTHONPATH="${WORKSPACE}/backend"
                     
-                    export PYTHONPATH="${WORKSPACE}/backend:${PYTHONPATH}"
-                    
-                    pytest -v \
-                        --junitxml=test-results.xml \
-                        --html=test-report.html \
-                        --self-contained-html \
-                        --cov=backend \
-                        --cov-report=html:htmlcov \
-                        --cov-report=term-missing \
-                        --cov-report=xml:coverage.xml \
+                    pytest -v \\
+                        --junitxml=test-results.xml \\
+                        --html=test-report.html \\
+                        --self-contained-html \\
                         backend/ || TEST_EXIT_CODE=$?
                     
-                    echo ""
-                    echo "📊 Résultats des tests générés:"
-                    ls -la test-results.xml test-report.html coverage.xml 2>/dev/null || echo "Certains rapports manquants"
-                    
-                    # Vérification que les tests ont réussi
                     if [ "${TEST_EXIT_CODE:-0}" -ne 0 ]; then
-                        echo "❌ Les tests ont échoué - le build sera arrêté"
+                        echo "❌ Tests échoués - arrêt du build"
                         exit ${TEST_EXIT_CODE}
                     else
-                        echo "✅ Tous les tests sont passés - le build peut continuer"
+                        echo "✅ Tests réussis"
                     fi
                 '''
             }
             
             post {
                 always {
-                    script {
-                        try {
-                            if (fileExists('test-results.xml')) {
-                                junit testResultsPattern: 'test-results.xml',
-                                      allowEmptyResults: false,
-                                      skipPublishingChecks: true
-                                echo "✅ Rapports de tests publiés dans Jenkins"
-                            }
-                        } catch (Exception e) {
-                            echo "⚠️ Impossible de publier les résultats JUnit: ${e.getMessage()}"
-                        }
-                        
-                        try {
-                            if (fileExists('test-report.html')) {
-                                archiveArtifacts artifacts: 'test-report.html',
-                                               fingerprint: true,
-                                               allowEmptyArchive: true
-                            }
-                            if (fileExists('htmlcov/index.html')) {
-                                archiveArtifacts artifacts: 'htmlcov/**/*',
-                                               fingerprint: true,
-                                               allowEmptyArchive: true
-                            }
-                        } catch (Exception e) {
-                            echo "⚠️ Archivage partiel des rapports: ${e.getMessage()}"
-                        }
-                    }
+                    junit 'test-results.xml'
+                    archiveArtifacts artifacts: 'test-report.html', allowEmptyArchive: true
                 }
             }
         }
         
         stage('📦 Build Frontend') {
             when {
-                expression {
-                    return currentBuild.result != 'FAILURE'
-                }
+                expression { currentBuild.result != 'FAILURE' }
             }
             steps {
-                echo '🎨 Construction du package frontend'
+                echo '🎨 Build Frontend'
                 sh '''
-                    echo "📁 Préparation du répertoire de build frontend"
                     mkdir -p dist/frontend
                     
                     if [ -d "frontend" ]; then
-                        echo "✅ Dossier frontend trouvé"
-                        
-                        # Copie des fichiers frontend
-                        cp -r frontend/* dist/frontend/ 2>/dev/null || echo "⚠️ Aucun fichier à copier"
-                        
-                        # Ajout d'informations de version
-                        cat > dist/frontend/version.txt << EOF
-Build Version: ${BUILD_VERSION}
-Build Date: $(date)
-Build Number: ${BUILD_NUMBER}
-Git Branch: ${GIT_BRANCH:-exercice4-antoine}
-Git Commit: ${GIT_COMMIT:-N/A}
-EOF
-                        
-                        # Création du README de déploiement
-                        cat > dist/frontend/DEPLOY.md << 'EOF'
-# Frontend Deployment
-
-## Déploiement
-1. Extraire l'archive dans le répertoire web
-2. Configurer le serveur web (Apache/Nginx)
-3. Vérifier que l'API backend est accessible
-
-## Configuration
-- Modifiez les URLs d'API si nécessaire
-- Vérifiez les permissions des fichiers
-
-## Structure
-- index.html : Page principale
-- *.js : Scripts JavaScript
-- *.css : Feuilles de style
-EOF
-                        
-                        echo "📦 Création de l'archive frontend"
-                        cd dist
-                        zip -r "${ARTIFACT_PREFIX}-frontend.zip" frontend/
-                        cd ..
-                        
-                        echo "✅ Archive frontend créée: ${ARTIFACT_PREFIX}-frontend.zip"
-                        ls -la dist/*.zip
-                        
+                        cp -r frontend/* dist/frontend/
+                        echo "✅ Frontend copié"
                     else
-                        echo "⚠️ Pas de dossier frontend trouvé"
-                        # Création d'un frontend minimal pour la démo
-                        mkdir -p dist/frontend
-                        cat > dist/frontend/index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head><title>CICD Project Frontend</title></head>
-<body>
-    <h1>Frontend - Version de démonstration</h1>
-    <p>Cette version a été générée automatiquement par Jenkins</p>
-    <p>Build: ${BUILD_VERSION}</p>
-</body>
-</html>
-EOF
-                        
-                        cd dist
-                        zip -r "${ARTIFACT_PREFIX}-frontend.zip" frontend/
-                        cd ..
-                        echo "✅ Frontend de démonstration créé"
+                        echo "<h1>Demo Frontend v${BUILD_VERSION}</h1>" > dist/frontend/index.html
+                        echo "✅ Frontend demo créé"
                     fi
+                    
+                    echo "Build: ${BUILD_VERSION}" > dist/frontend/version.txt
+                    echo "Date: $(date)" >> dist/frontend/version.txt
+                    
+                    cd dist
+                    zip -r "${ARTIFACT_PREFIX}-frontend.zip" frontend/
+                    cd ..
+                    
+                    echo "✅ Frontend packagé"
                 '''
             }
         }
         
         stage('🐍 Build Backend') {
             when {
-                expression {
-                    return currentBuild.result != 'FAILURE'
-                }
+                expression { currentBuild.result != 'FAILURE' }
             }
             steps {
-                echo '⚙️ Construction du package backend Python'
+                echo '⚙️ Build Backend'
                 sh '''
-                    echo "📁 Préparation du répertoire de build backend"
                     mkdir -p dist/backend
                     
                     if [ -d "backend" ]; then
-                        echo "✅ Dossier backend trouvé"
+                        echo "📂 Copie des fichiers backend"
+                        for file in backend/*.py; do
+                            if [[ "$file" != *test* ]]; then
+                                cp "$file" dist/backend/
+                                echo "Copié: $(basename "$file")"
+                            fi
+                        done
                         
-                        # Copie des fichiers backend (sans les tests)
-                        find backend -name "*.py" ! -name "*test*" | while read file; do cp "%file" dist/backend/; done
-                        
-                        # Copie des autres fichiers nécessaires
                         [ -f "requirements.txt" ] && cp requirements.txt dist/backend/
                         
-                        # Création du fichier de version
-                        cat > dist/backend/version.py << EOF
-# Version information generated by Jenkins
+                        echo "📝 Création version.py"
+                        cat > dist/backend/version.py << VEOF
 BUILD_VERSION = "${BUILD_VERSION}"
 BUILD_DATE = "$(date)"
 BUILD_NUMBER = "${BUILD_NUMBER}"
-GIT_BRANCH = "${GIT_BRANCH:-exercice4-antoine}"
-GIT_COMMIT = "${GIT_COMMIT:-N/A}"
 
 def get_version_info():
     return {
         "version": BUILD_VERSION,
         "build_date": BUILD_DATE,
-        "build_number": BUILD_NUMBER,
-        "git_branch": GIT_BRANCH,
-        "git_commit": GIT_COMMIT
+        "build_number": BUILD_NUMBER
     }
-EOF
+VEOF
                         
-                        # Création du script de démarrage
-                        cat > dist/backend/start.py << 'EOF'
+                        echo "📝 Création start.py"
+                        cat > dist/backend/start.py << SEOF
 #!/usr/bin/env python3
-"""
-Script de démarrage pour l'application backend
-Généré automatiquement par Jenkins
-"""
 import os
 import sys
 
-# Ajout du répertoire courant au PYTHONPATH
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from app import app
     from version import get_version_info
     
-    print("🚀 Démarrage de l'application backend")
+    print("🚀 Démarrage backend")
     print(f"📦 Version: {get_version_info()}")
-    print("🌐 Application disponible sur http://localhost:5000")
     
     app.run(host='0.0.0.0', port=5000, debug=False)
     
 except ImportError as e:
-    print(f"❌ Erreur d'import: {e}")
-    print("📋 Vérifiez que toutes les dépendances sont installées")
+    print(f"❌ Erreur import: {e}")
     sys.exit(1)
 except Exception as e:
-    print(f"❌ Erreur de démarrage: {e}")
+    print(f"❌ Erreur: {e}")
     sys.exit(1)
-EOF
+SEOF
                         
-                        # Création du README de déploiement
-                        cat > dist/backend/README.md << 'EOF'
-# Backend Deployment
-
-## Installation
-```bash
-pip install -r requirements.txt
+                        cd dist
+                        zip -r "${ARTIFACT_PREFIX}-backend.zip" backend/
+                        cd ..
+                        
+                        echo "✅ Backend packagé"
+                        ls -la dist/backend/
+                        
+                    else
+                        echo "❌ Dossier backend introuvable"
+                        exit 1
+                    fi
+                '''
+            }
+        }
+        
+        stage('📊 Build Summary') {
+            when {
+                expression { currentBuild.result != 'FAILURE' }
+            }
+            steps {
+                sh '''
+                    echo "🎯 RÉSUMÉ DU BUILD"
+                    echo "Version: ${BUILD_VERSION}"
+                    echo "Date: $(date)"
+                    
+                    if [ -d "dist" ]; then
+                        echo "📁 Artefacts:"
+                        ls -la dist/
+                        
+                        cat > dist/build-info.json << BEOF
+{
+    "build_version": "${BUILD_VERSION}",
+    "build_number": "${BUILD_NUMBER}",
+    "build_date": "$(date -Iseconds)",
+    "artifacts": [
+        "${ARTIFACT_PREFIX}-frontend.zip",
+        "${ARTIFACT_PREFIX}-backend.zip"
+    ]
+}
+BEOF
+                        
+                        echo "✅ Métadonnées créées"
+                    else
+                        echo "❌ Aucun artefact"
+                        exit 1
+                    fi
+                '''
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                try {
+                    if (fileExists('dist/')) {
+                        archiveArtifacts artifacts: 'dist/*.zip, dist/*.json', 
+                                       fingerprint: true, 
+                                       allowEmptyArchive: false
+                        echo "✅ Artefacts archivés"
+                    }
+                } catch (Exception e) {
+                    echo "⚠️ Archivage partiel: ${e.getMessage()}"
+                }
+            }
+        }
+        
+        success {
+            echo '🎉 BUILD ET LIVRAISON RÉUSSIS!'
+        }
+        
+        failure {
+            echo '❌ BUILD ÉCHOUÉ!'
+        }
+        
+        unstable {
+            echo '⚠️ BUILD INSTABLE!'
+        }
+    }
+}
