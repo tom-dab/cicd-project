@@ -237,7 +237,7 @@ EOF
                         echo "✅ Dossier backend trouvé"
                         
                         # Copie des fichiers backend (sans les tests)
-                        find backend -name "*.py" ! -name "*test*" -exec cp {} dist/backend/ \;
+                        find backend -name "*.py" ! -name "*test*" | while read file; do cp "%file" dist/backend/; done
                         
                         # Copie des autres fichiers nécessaires
                         [ -f "requirements.txt" ] && cp requirements.txt dist/backend/
