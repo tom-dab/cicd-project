@@ -10,6 +10,8 @@ pipeline {
         PYTHONPATH = "${WORKSPACE}/backend"
         BUILD_VERSION = "1.0.${env.BUILD_NUMBER}"
         ARTIFACT_PREFIX = "cicd-project-${env.BUILD_VERSION}"
+        DEPLOY_SERVER = credentials('deploy-server-ip')
+        DEPLOY_USER = 'deploy'
     }
     
     stages {
@@ -30,7 +32,7 @@ pipeline {
                 echo '🔧 Configuration environnement'
                 sh '''
                     pip install --upgrade pip
-                    apt-get update && apt-get install -y zip unzip
+                    apt-get update && apt-get install -y zip unzip openssh-client sshpass
                     
                     if [ -f "requirements.txt" ]; then
                         pip install -r requirements.txt
@@ -60,7 +62,7 @@ pipeline {
                         echo "❌ Tests échoués - arrêt du build"
                         exit ${TEST_EXIT_CODE}
                     else
-                        echo "✅ Tests réussis"
+                        echo "✅ Tests réussis - déploiement autorisé"
                     fi
                 '''
             }
@@ -86,7 +88,27 @@ pipeline {
                         cp -r frontend/* dist/frontend/
                         echo "✅ Frontend copié"
                     else
-                        echo "<h1>Demo Frontend v${BUILD_VERSION}</h1>" > dist/frontend/index.html
+                        cat > dist/frontend/index.html << 'FEOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CICD Project - Version ${BUILD_VERSION}</title>
+    <style>
+        body { font-family: Arial; margin: 50px; text-align: center; }
+        .version { color: #666; font-size: 14px; }
+        .status { color: green; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🚀 CICD Project</h1>
+    <p class="status">✅ Déployé automatiquement par Jenkins!</p>
+    <p class="version">Version: ${BUILD_VERSION}</p>
+    <p class="version">Déployé le: $(date)</p>
+    <hr>
+    <p><a href="/api/employe">🔗 Tester l'API Backend</a></p>
+</body>
+</html>
+FEOF
                         echo "✅ Frontend demo créé"
                     fi
                     
@@ -123,7 +145,7 @@ pipeline {
                         [ -f "requirements.txt" ] && cp requirements.txt dist/backend/
                         
                         echo "📝 Création version.py"
-                        cat > dist/backend/version.py << VEOF
+                        cat > dist/backend/version.py << 'VEOF'
 BUILD_VERSION = "${BUILD_VERSION}"
 BUILD_DATE = "$(date)"
 BUILD_NUMBER = "${BUILD_NUMBER}"
@@ -136,8 +158,8 @@ def get_version_info():
     }
 VEOF
                         
-                        echo "📝 Création start.py"
-                        cat > dist/backend/start.py << SEOF
+                        echo "📝 Création app_deploy.py"
+                        cat > dist/backend/app_deploy.py << 'SEOF'
 #!/usr/bin/env python3
 import os
 import sys
@@ -148,10 +170,14 @@ try:
     from app import app
     from version import get_version_info
     
-    print("🚀 Démarrage backend")
-    print(f"📦 Version: {get_version_info()}")
+    print(f"🚀 Démarrage backend - Version: {get_version_info()['version']}")
     
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # Configuration pour production
+    app.config['DEBUG'] = False
+    app.config['TESTING'] = False
+    
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0', port=5000, debug=False)
     
 except ImportError as e:
     print(f"❌ Erreur import: {e}")
@@ -160,6 +186,25 @@ except Exception as e:
     print(f"❌ Erreur: {e}")
     sys.exit(1)
 SEOF
+                        
+                        # Service systemd pour le backend
+                        cat > dist/backend/backend-app.service << 'SERVEOF'
+[Unit]
+Description=Backend CICD Application
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+WorkingDirectory=/opt/backend-app
+ExecStart=/usr/bin/python3 /opt/backend-app/app_deploy.py
+Restart=always
+RestartSec=3
+Environment=PYTHONPATH=/opt/backend-app
+
+[Install]
+WantedBy=multi-user.target
+SERVEOF
                         
                         cd dist
                         zip -r "${ARTIFACT_PREFIX}-backend.zip" backend/
@@ -176,37 +221,161 @@ SEOF
             }
         }
         
-        stage('📊 Build Summary') {
+        stage('🚀 Deploy Frontend') {
             when {
                 expression { currentBuild.result != 'FAILURE' }
             }
             steps {
+                echo '🌐 Déploiement Frontend sur Apache'
+                sshagent(['deploy-ssh-key']) {
+                    sh '''
+                        echo "📤 Envoi frontend vers serveur"
+                        
+                        # Copie de l'archive frontend
+                        scp -o StrictHostKeyChecking=no \\
+                            "dist/${ARTIFACT_PREFIX}-frontend.zip" \\
+                            ${DEPLOY_USER}@${DEPLOY_SERVER}:/tmp/
+                        
+                        # Déploiement sur le serveur
+                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_SERVER} << 'DEPLOY_EOF'
+                            echo "🗂️ Sauvegarde de l'ancien frontend"
+                            sudo mkdir -p /var/backups/frontend
+                            sudo cp -r /var/www/html /var/backups/frontend/backup-$(date +%Y%m%d-%H%M%S) 2>/dev/null || true
+                            
+                            echo "🧹 Nettoyage du répertoire web"
+                            sudo rm -rf /var/www/html/*
+                            
+                            echo "📦 Extraction du nouveau frontend"
+                            cd /tmp
+                            unzip -o ${ARTIFACT_PREFIX}-frontend.zip
+                            sudo cp -r frontend/* /var/www/html/
+                            sudo chown -R www-data:www-data /var/www/html
+                            sudo chmod -R 644 /var/www/html
+                            sudo find /var/www/html -type d -exec chmod 755 {} \\;
+                            
+                            echo "🔄 Redémarrage Apache"
+                            sudo systemctl reload apache2
+                            
+                            echo "✅ Frontend déployé"
+                            ls -la /var/www/html/
+DEPLOY_EOF
+                        
+                        echo "✅ Frontend déployé avec succès"
+                    '''
+                }
+            }
+        }
+        
+        stage('⚙️ Deploy Backend') {
+            when {
+                expression { currentBuild.result != 'FAILURE' }
+            }
+            steps {
+                echo '🐍 Déploiement Backend Python'
+                sshagent(['deploy-ssh-key']) {
+                    sh '''
+                        echo "📤 Envoi backend vers serveur"
+                        
+                        # Copie de l'archive backend
+                        scp -o StrictHostKeyChecking=no \\
+                            "dist/${ARTIFACT_PREFIX}-backend.zip" \\
+                            ${DEPLOY_USER}@${DEPLOY_SERVER}:/tmp/
+                        
+                        # Déploiement sur le serveur
+                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_SERVER} << 'BACKEND_EOF'
+                            echo "🗂️ Sauvegarde de l'ancien backend"
+                            sudo mkdir -p /var/backups/backend
+                            sudo cp -r /opt/backend-app /var/backups/backend/backup-$(date +%Y%m%d-%H%M%S) 2>/dev/null || true
+                            
+                            echo "🛑 Arrêt du service backend"
+                            sudo systemctl stop backend-app 2>/dev/null || echo "Service pas encore installé"
+                            
+                            echo "🧹 Nettoyage du répertoire backend"
+                            sudo rm -rf /opt/backend-app/*
+                            
+                            echo "📦 Extraction du nouveau backend"
+                            cd /tmp
+                            unzip -o ${ARTIFACT_PREFIX}-backend.zip
+                            sudo cp -r backend/* /opt/backend-app/
+                            sudo chown -R deploy:deploy /opt/backend-app
+                            sudo chmod +x /opt/backend-app/app_deploy.py
+                            
+                            echo "🔧 Installation des dépendances Python"
+                            cd /opt/backend-app
+                            if [ -f "requirements.txt" ]; then
+                                sudo apt-get update && sudo apt-get install -y python3-pip
+                                pip3 install -r requirements.txt
+                            else
+                                sudo apt-get update && sudo apt-get install -y python3-pip
+                                pip3 install flask flask-cors requests
+                            fi
+                            
+                            echo "⚙️ Configuration du service systemd"
+                            sudo cp backend-app.service /etc/systemd/system/
+                            sudo systemctl daemon-reload
+                            sudo systemctl enable backend-app
+                            
+                            echo "🚀 Démarrage du service backend"
+                            sudo systemctl start backend-app
+                            sleep 3
+                            sudo systemctl status backend-app
+                            
+                            echo "✅ Backend déployé et démarré"
+BACKEND_EOF
+                        
+                        echo "✅ Backend déployé avec succès"
+                    '''
+                }
+            }
+        }
+        
+        stage('🧪 Post-Deploy Tests') {
+            steps {
+                echo '🔍 Tests post-déploiement'
+                sshagent(['deploy-ssh-key']) {
+                    sh '''
+                        echo "🌐 Test du frontend"
+                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_SERVER} \\
+                            "curl -s -o /dev/null -w '%{http_code}' http://localhost/" || echo "Frontend test échoué"
+                        
+                        echo "🐍 Test du backend"
+                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_SERVER} \\
+                            "curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/ || echo 'Backend en cours de démarrage...'"
+                        
+                        sleep 5
+                        
+                        echo "📊 Statut des services"
+                        ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_SERVER} \\
+                            "sudo systemctl is-active apache2 && sudo systemctl is-active backend-app"
+                    '''
+                }
+            }
+        }
+        
+        stage('📊 Deployment Summary') {
+            steps {
                 sh '''
-                    echo "🎯 RÉSUMÉ DU BUILD"
-                    echo "Version: ${BUILD_VERSION}"
-                    echo "Date: $(date)"
+                    echo "🎯 RÉSUMÉ DU DÉPLOIEMENT"
+                    echo "======================"
+                    echo "📦 Version: ${BUILD_VERSION}"
+                    echo "📅 Date: $(date)"
+                    echo "🌐 Serveur: ${DEPLOY_SERVER}"
+                    echo "👤 Utilisateur: ${DEPLOY_USER}"
+                    echo ""
+                    echo "✅ Frontend déployé: http://${DEPLOY_SERVER}/"
+                    echo "✅ Backend déployé: http://${DEPLOY_SERVER}:5000/"
+                    echo "📊 Logs: sudo journalctl -u backend-app -f"
                     
-                    if [ -d "dist" ]; then
-                        echo "📁 Artefacts:"
-                        ls -la dist/
-                        
-                        cat > dist/build-info.json << BEOF
+                    cat > deployment-info.json << 'DEPEOF'
 {
-    "build_version": "${BUILD_VERSION}",
-    "build_number": "${BUILD_NUMBER}",
-    "build_date": "$(date -Iseconds)",
-    "artifacts": [
-        "${ARTIFACT_PREFIX}-frontend.zip",
-        "${ARTIFACT_PREFIX}-backend.zip"
-    ]
+    "deployment_version": "${BUILD_VERSION}",
+    "deployment_date": "$(date -Iseconds)",
+    "server": "${DEPLOY_SERVER}",
+    "frontend_url": "http://${DEPLOY_SERVER}/",
+    "backend_url": "http://${DEPLOY_SERVER}:5000/",
+    "services": ["apache2", "backend-app"]
 }
-BEOF
-                        
-                        echo "✅ Métadonnées créées"
-                    else
-                        echo "❌ Aucun artefact"
-                        exit 1
-                    fi
+DEPEOF
                 '''
             }
         }
@@ -217,7 +386,7 @@ BEOF
             script {
                 try {
                     if (fileExists('dist/')) {
-                        archiveArtifacts artifacts: 'dist/*.zip, dist/*.json', 
+                        archiveArtifacts artifacts: 'dist/*.zip, deployment-info.json', 
                                        fingerprint: true, 
                                        allowEmptyArchive: false
                         echo "✅ Artefacts archivés"
@@ -229,15 +398,17 @@ BEOF
         }
         
         success {
-            echo '🎉 BUILD ET LIVRAISON RÉUSSIS!'
+            echo '🎉 DÉPLOIEMENT CONTINU RÉUSSI!'
+            echo "✅ Application disponible sur http://${env.DEPLOY_SERVER}/"
         }
         
         failure {
-            echo '❌ BUILD ÉCHOUÉ!'
+            echo '❌ DÉPLOIEMENT ÉCHOUÉ!'
+            echo '🔄 Rollback automatique recommandé'
         }
         
         unstable {
-            echo '⚠️ BUILD INSTABLE!'
+            echo '⚠️ DÉPLOIEMENT INSTABLE!'
         }
     }
 }
