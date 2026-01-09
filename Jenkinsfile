@@ -1,17 +1,30 @@
 pipeline {
     agent any
 
+    /* ===== PARAMÈTRES JENKINS EXO6 ===== */
+    parameters {
+        string(
+            name: 'APP_PORT',
+            defaultValue: '5000', // Elle va modifié le confichier de config plus bas
+            description: 'Port sur lequel le backend doit écouter'
+        )
+    }
+
+    /* ===== VARIABLES D’ENVIRONNEMENT ===== */
     environment {
-        FRONTEND_SSH = 'ssh-frontend' // ID du credential SSH pour le front
-        FRONTEND_HOST = '172.16.0.156' // Remplace par l'IP de la VM Apache
-        FRONTEND_USER = 'user'   // Remplace par ton user SSH
+        FRONTEND_SERVER = "172.16.0.156"
+        FRONTEND_USER   = "user"
+        BACKEND_DIR     = "/opt/backend"
+        CONFIG_FILE     = "backend/config.env"
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 echo "📥 Clonage du projet Git"
-                git branch: 'exercice5-coralie', url: 'https://github.com/tom-dab/cicd-project.git'
+                git branch: 'exercice6-coralie',
+                    url: 'https://github.com/tom-dab/cicd-project.git'
             }
         }
 
@@ -19,11 +32,20 @@ pipeline {
             steps {
                 sh '''
                     python3 -m venv venv
-                    echo "⚡ Activation du venv"
                     . venv/bin/activate
                     pip install --upgrade pip
                     pip install -r backend/requirements.txt
                     pip install pytest pytest-html pytest-cov flask-cors
+                '''
+            }
+        }
+
+        stage('Configurer le port (Exercice 6)') {
+            steps {
+                echo "⚙️ Configuration du port backend : ${APP_PORT}"
+                sh '''
+                    echo "APP_PORT=${APP_PORT}" > backend/config.env
+                    cat backend/config.env
                 '''
             }
         }
@@ -43,9 +65,6 @@ pipeline {
         }
 
         stage('Build Backend') {
-            when {
-                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-            }
             steps {
                 sh '''
                     echo "📦 Packaging backend"
@@ -57,9 +76,6 @@ pipeline {
         }
 
         stage('Build Frontend') {
-            when {
-                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-            }
             steps {
                 sh '''
                     echo "📦 Packaging frontend"
@@ -71,38 +87,37 @@ pipeline {
         }
 
         stage('Deploy Frontend') {
-            when {
-                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-            }
             steps {
-                sshagent([env.FRONTEND_SSH]) {
-                    sh """
-                        echo "🚀 Déploiement frontend sur ${FRONTEND_HOST}"
-                        scp build/frontend.zip ${FRONTEND_USER}@${FRONTEND_HOST}:/tmp/
-                        ssh ${FRONTEND_USER}@${FRONTEND_HOST} 'unzip -o /tmp/frontend.zip -d /var/www/html && rm /tmp/frontend.zip'
-                    """
+                sshagent(credentials: ['ssh-frontend']) {
+                    sh '''
+                        echo "🚀 Déploiement frontend"
+                        scp build/frontend.zip ${FRONTEND_USER}@${FRONTEND_SERVER}:/tmp/
+                        ssh ${FRONTEND_USER}@${FRONTEND_SERVER} "
+                            unzip -o /tmp/frontend.zip -d /var/www/html &&
+                            rm /tmp/frontend.zip
+                        "
+                    '''
                 }
             }
         }
 
         stage('Deploy Backend') {
-            when {
-                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
-            }
             steps {
                 sh '''
-                    echo "🚀 Déploiement backend (local ou VM Jenkins)"
-                    unzip -o build/backend.zip -d /opt/backend/
+                    echo "🚀 Déploiement backend"
+                    mkdir -p ${BACKEND_DIR}
+                    unzip -o build/backend.zip -d ${BACKEND_DIR}
                 '''
-                // Ici tu peux ajouter le restart de service si tu as un service systemd
-                // sh 'systemctl restart backend.service'
             }
         }
     }
 
     post {
-        always { echo "🧹 Pipeline terminée" }
-        success { echo "🎉 Pipeline réussie!" }
-        failure { echo "❌ Échec de la pipeline" }
+        success {
+            echo "🎉 Pipeline réussie – application déployée sur le port ${APP_PORT}"
+        }
+        failure {
+            echo "❌ Échec de la pipeline"
+        }
     }
 }
