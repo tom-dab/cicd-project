@@ -58,54 +58,47 @@ pipeline {
         }
 
         stage('Deploy to Server') {
-            when {
-                expression { currentBuild.currentResult == 'SUCCESS' }
-            }
-            steps {
-                echo '🚀 Déploiement sur le serveur Linux'
-                sshagent(['ssh-credential-id']) {
-                    sh '''
-                        # ⚠️ À ADAPTER PAR CHAQUE CAMARADE :
-                        # Remplacer ces valeurs par celles de votre VM
-                        export SERVER_IP="10.235.247.132"
-                        export SSH_USER="jenkins"
-                        
-                        echo "📤 Transfert des archives vers le serveur"
-                        scp front.zip ${SSH_USER}@${SERVER_IP}:/tmp/
-                        scp back.zip ${SSH_USER}@${SERVER_IP}:/tmp/
-                        
-                        echo "🌐 Déploiement du front"
-                        ssh ${SSH_USER}@${SERVER_IP} << 'EOF'
-sudo -n bash -c '
-    cd /var/www/html
-    rm -rf *
-    unzip -q /tmp/front.zip
-    echo "✅ Front déployé"
-'
+    when {
+        expression { currentBuild.currentResult == 'SUCCESS' }
+    }
+    steps {
+        echo '🚀 Déploiement sur le serveur Linux'
+        sshagent(['ssh-credential-id']) {
+            sh '''
+                export SERVER_IP=10.235.247.132
+                export SSH_USER=jenkins
+
+                echo "📤 Transfert des archives vers le serveur"
+                scp front.zip ${SSH_USER}@${SERVER_IP}:/tmp/
+                scp back.zip  ${SSH_USER}@${SERVER_IP}:/tmp/
+
+                echo "🌐 Déploiement du front"
+                ssh ${SSH_USER}@${SERVER_IP} << 'EOF'
+cd /var/www/html
+rm -rf *
+unzip -q /tmp/front.zip
+echo "✅ Front déployé"
 EOF
-                        
-                        echo "🐍 Déploiement du back"
-                        ssh ${SSH_USER}@${SERVER_IP} << 'EOF'
-sudo -n bash -c '
-    mkdir -p /opt/app
-    cd /opt/app
-    unzip -qo /tmp/back.zip
-    
-    python3 -m venv venv
-    . venv/bin/activate
-    pip install -r backend/requirements.txt
-    
-    echo "✅ Back déployé"
-    
-    # À adapter : relancer le service selon votre config
-    # systemctl restart app-backend (si service systemd)
-    # ou lancer directement : nohup python backend/app.py &
-'
+
+                echo "🐍 Déploiement du back"
+                ssh ${SSH_USER}@${SERVER_IP} << 'EOF'
+mkdir -p /opt/app
+cd /opt/app
+unzip -qo /tmp/back.zip
+
+python3 -m venv venv
+. venv/bin/activate
+pip install -r backend/requirements.txt
+
+echo "✅ Back déployé"
+# Exemple de lancement du back :
+# nohup python backend/app.py > app.log 2>&1 &
 EOF
-                    '''
-                }
-            }
+            '''
         }
+    }
+}
+
     }
 
     post {
