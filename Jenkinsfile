@@ -4,7 +4,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                echo '📥 Clonage du projet Python'
+                echo '📥 Clonage du projet'
                 checkout scm
             }
         }
@@ -24,7 +24,6 @@ pipeline {
                         pip install flask flask-cors requests pytest pytest-html pytest-cov
                     fi
                     echo "✅ Dépendances installées"
-                    pip list
                 '''
             }
         }
@@ -38,12 +37,34 @@ pipeline {
                 '''
             }
         }
+
+        stage('Build artifacts') {
+            // ce stage ne sera exécuté que si les stages précédents ont réussi
+            steps {
+                sh '''
+                    echo "📦 Création de l'archive backend"
+                    rm -f backend.zip frontend.zip
+
+                    # backend : on archive le code Python et le requirements
+                    zip -r backend.zip backend/app.py backend/test_app.py backend/requirements.txt
+
+                    echo "📦 Création de l'archive frontend"
+                    zip -r frontend.zip frontend/
+                '''
+            }
+        }
     }
 
     post {
-        always { echo '🧹 Nettoyage terminé' }
-        success { echo '🎉 Pipeline Python réussie!' }
-        failure { echo '❌ Échec de la pipeline Python' }
-        unstable { echo '⚠️ Pipeline instable' }
+        success {
+            echo '🎉 Pipeline Python réussie, publication des artifacts'
+            archiveArtifacts artifacts: 'backend.zip, frontend.zip', fingerprint: true
+        }
+        failure {
+            echo '❌ Échec de la pipeline Python (pas de build ni d\'artifacts)'
+        }
+        always {
+            echo '🧹 Nettoyage terminé'
+        }
     }
 }
