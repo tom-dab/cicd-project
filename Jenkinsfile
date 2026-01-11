@@ -67,7 +67,7 @@ pipeline {
                     sh '''
                         # ⚠️ À ADAPTER PAR CHAQUE CAMARADE :
                         # Remplacer ces valeurs par celles de votre VM
-                        export SERVER_IP="10.235.242.132"
+                        export SERVER_IP="10.235.247.132"
                         export SSH_USER="jenkins"
                         
                         echo "📤 Transfert des archives vers le serveur"
