@@ -2,14 +2,7 @@ pipeline {
     agent any
 
     stages {
-        stage('Checkout') {
-            steps {
-                echo '📥 Clonage du projet Python'
-                checkout scm
-            }
-        }
-
-        stage('Setup Virtualenv & Dependencies') {
+        stage('Setup venv & Install') {
             steps {
                 sh '''
                     echo "🔧 Création d'un environnement virtuel"
@@ -24,7 +17,6 @@ pipeline {
                         pip install flask flask-cors requests pytest pytest-html pytest-cov
                     fi
                     echo "✅ Dépendances installées"
-                    pip list
                 '''
             }
         }
@@ -41,9 +33,9 @@ pipeline {
     }
 
     post {
-        always { echo '🧹 Nettoyage terminé' }
-        success { echo '🎉 Pipeline Python réussie!' }
-        failure { echo '❌ Échec de la pipeline Python' }
+        always   { echo '🧹 Nettoyage terminé' }
+        success  { echo '🎉 Pipeline Python réussie!' }
+        failure  { echo '❌ Échec de la pipeline Python' }
         unstable { echo '⚠️ Pipeline instable' }
     }
 }
