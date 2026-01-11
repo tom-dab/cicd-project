@@ -67,8 +67,8 @@ pipeline {
                     sh '''
                         # ⚠️ À ADAPTER PAR CHAQUE CAMARADE :
                         # Remplacer ces valeurs par celles de votre VM
-                        export SERVER_IP="<VOTRE_IP_OU_HOSTNAME>"
-                        export SSH_USER="<VOTRE_UTILISATEUR_SSH>"
+                        export SERVER_IP="10.235.242.132"
+                        export SSH_USER="jenkins"
                         
                         echo "📤 Transfert des archives vers le serveur"
                         scp front.zip ${SSH_USER}@${SERVER_IP}:/tmp/
